@@ -1,39 +1,113 @@
-import React, { ChangeEvent, useState } from 'react';
+import React, { ChangeEvent, useMemo, useState } from 'react';
 
-const tabs = [
+type TeacherTab = 'classes' | 'materials' | 'reports';
+
+type ParsedOption = {
+  key: string;
+  content: string;
+  isCorrect: boolean;
+};
+
+type ParsedQuestion = {
+  order: number;
+  question: string;
+  options: ParsedOption[];
+  correctAnswer: string | null;
+  explanation: string;
+  questionType: 'single_choice' | 'true_false';
+};
+
+type ParsedResponse = {
+  totalQuestions: number;
+  questions: ParsedQuestion[];
+};
+
+type UploadedMaterial = {
+  id: string;
+  name: string;
+  status: 'idle' | 'uploading' | 'success' | 'error';
+  error?: string;
+  parsed?: ParsedResponse;
+};
+
+const tabs: { key: TeacherTab; label: string }[] = [
   { key: 'classes', label: 'Lớp học' },
   { key: 'materials', label: 'Học liệu' },
   { key: 'reports', label: 'Báo cáo' },
-] as const;
-
-type TeacherTab = typeof tabs[number]['key'];
-
-const initialMaterials = [
-  'Đề cương_ôn_tập_HK1.docx',
-  'Bài_tập_hàm_số_nâng_cao.docx',
 ];
 
-export function TeacherDashboard() {
-  const [activeTab, setActiveTab] = useState<TeacherTab>('classes');
-  const [uploadedFiles, setUploadedFiles] = useState<string[]>(initialMaterials);
+const starterMaterials: UploadedMaterial[] = [
+  { id: 'file-1', name: 'mẫu equa.docx', status: 'idle' },
+  { id: 'file-2', name: 'Đề cương_ôn_tập_HK1.docx', status: 'idle' },
+  { id: 'file-3', name: 'Bài_tập_hàm_số_nâng_cao.docx', status: 'idle' },
+];
 
-  const handleUpload = (event: ChangeEvent<HTMLInputElement>) => {
+const DOCX_API_URL = import.meta.env.VITE_DOCX_API_URL ?? 'http://localhost:3001';
+
+export function TeacherDashboard() {
+  const [activeTab, setActiveTab] = useState<TeacherTab>('materials');
+  const [materials, setMaterials] = useState<UploadedMaterial[]>(starterMaterials);
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(starterMaterials[0]?.id ?? null);
+  const [notice, setNotice] = useState('');
+
+  const selectedMaterial = useMemo(
+    () => materials.find((item) => item.id === selectedFileId) ?? null,
+    [materials, selectedFileId],
+  );
+
+  const setMaterialState = (id: string, updater: (old: UploadedMaterial) => UploadedMaterial) => {
+    setMaterials((prev) => prev.map((item) => (item.id === id ? updater(item) : item)));
+  };
+
+  const uploadDocx = async (file: File, materialId: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${DOCX_API_URL}/api/exams/parse-docx`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || payload.details || 'Không parse được file Word.');
+    }
+
+    return payload as ParsedResponse;
+  };
+
+  const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) return;
 
-    const validFiles = files
-      .filter((file) => /\.(doc|docx)$/i.test(file.name))
-      .map((file) => file.name);
+    setNotice('');
 
-    if (validFiles.length) {
-      setUploadedFiles((previous) => [...validFiles, ...previous]);
+    for (const file of files) {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const material: UploadedMaterial = { id, name: file.name, status: 'uploading' };
+      setMaterials((prev) => [material, ...prev]);
+      setSelectedFileId(id);
+
+      if (!/\.docx$/i.test(file.name)) {
+        setMaterialState(id, (old) => ({ ...old, status: 'error', error: 'Hệ thống hiện chỉ hỗ trợ file .docx.' }));
+        continue;
+      }
+
+      try {
+        const parsed = await uploadDocx(file, id);
+        setMaterialState(id, (old) => ({ ...old, status: 'success', parsed }));
+        setNotice(`Đã parse thành công: ${file.name} (${parsed.totalQuestions} câu).`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Upload thất bại.';
+        setMaterialState(id, (old) => ({ ...old, status: 'error', error: message }));
+      }
     }
 
     event.target.value = '';
   };
 
   return (
-    <main className="dashboard-page">
+    <main className="dashboard-page teacher-layout">
       <aside className="sidebar teacher-sidebar">
         <h2>TOÁN FLOWMAP</h2>
         <p className="sidebar-caption">Không gian giáo viên</p>
@@ -52,14 +126,22 @@ export function TeacherDashboard() {
         </nav>
       </aside>
 
-      <section className="dashboard-content">
-        <header className="content-header">
+      <section className="dashboard-content teacher-content">
+        <header className="content-header teacher-header">
           <h1>Trang giáo viên</h1>
           <p>Quản lý lớp học, học liệu và báo cáo tiến độ.</p>
         </header>
 
         {activeTab === 'classes' && <ClassesTab />}
-        {activeTab === 'materials' && <MaterialsTab uploadedFiles={uploadedFiles} onUpload={handleUpload} />}
+        {activeTab === 'materials' && (
+          <MaterialsTab
+            materials={materials}
+            selectedMaterial={selectedMaterial}
+            onUpload={handleUpload}
+            onSelect={setSelectedFileId}
+            notice={notice}
+          />
+        )}
         {activeTab === 'reports' && <ReportsTab />}
       </section>
     </main>
@@ -67,63 +149,102 @@ export function TeacherDashboard() {
 }
 
 function ClassesTab() {
-  const classRows = [
-    { name: '10A1', subject: 'Toán cơ bản', students: 42 },
-    { name: '11A3', subject: 'Luyện thi học kỳ', students: 38 },
-    { name: '12A2', subject: 'Luyện thi THPT Quốc gia', students: 45 },
-    { name: '12C1', subject: 'Ôn chuyên đề tích phân', students: 32 },
-  ];
-
   return (
     <article className="panel">
       <h3>Danh sách lớp học</h3>
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>Lớp</th>
-            <th>Chuyên đề</th>
-            <th>Sĩ số</th>
-          </tr>
-        </thead>
-        <tbody>
-          {classRows.map((row) => (
-            <tr key={row.name}>
-              <td>{row.name}</td>
-              <td>{row.subject}</td>
-              <td>{row.students}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <p>12A2, 11A1, 10A3 đang hoạt động tốt. Chuyển sang tab Học liệu để tải đề thi .docx.</p>
     </article>
   );
 }
 
 function MaterialsTab({
-  uploadedFiles,
+  materials,
+  selectedMaterial,
   onUpload,
+  onSelect,
+  notice,
 }: {
-  uploadedFiles: string[];
+  materials: UploadedMaterial[];
+  selectedMaterial: UploadedMaterial | null;
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  onSelect: (id: string) => void;
+  notice: string;
 }) {
   return (
-    <article className="panel">
-      <h3>Quản lý học liệu</h3>
-      <p>Cho phép tải lên file Word để chia sẻ cho học sinh.</p>
-      <label htmlFor="word-upload" className="upload-box">
-        <span>Nhấn để tải lên file .doc/.docx</span>
-        <input id="word-upload" type="file" accept=".doc,.docx" multiple onChange={onUpload} />
-      </label>
+    <section className="materials-shell">
+      <article className="panel materials-main-panel">
+        <h3>Quản lý học liệu</h3>
+        <p>Cho phép tải lên file Word để chia sẻ cho học sinh.</p>
 
-      <h4>Danh sách file đã tải lên</h4>
-      <ul className="simple-list">
-        {uploadedFiles.map((file) => (
-          <li key={file}>{file}</li>
-        ))}
-      </ul>
-    </article>
+        <label htmlFor="word-upload" className="upload-box upload-box-large">
+          <span>Nhấn để tải lên file .doc/.docx</span>
+          <input id="word-upload" type="file" accept=".doc,.docx" multiple onChange={onUpload} />
+        </label>
+
+        {notice && <p className="upload-notice">{notice}</p>}
+
+        <h4>Danh sách file đã tải lên</h4>
+        <ul className="simple-list uploaded-material-list">
+          {materials.map((file) => (
+            <li key={file.id}>
+              <button
+                type="button"
+                className={`file-link ${selectedMaterial?.id === file.id ? 'active' : ''}`}
+                onClick={() => onSelect(file.id)}
+              >
+                {file.name}
+              </button>
+              <span className={`file-status ${file.status}`}>{statusLabel[file.status]}</span>
+              {file.error && <div className="file-error">{file.error}</div>}
+            </li>
+          ))}
+        </ul>
+      </article>
+
+      <article className="panel parser-preview-panel">
+        <h3>Kết quả parse</h3>
+        {!selectedMaterial && <p>Chưa có file được chọn.</p>}
+
+        {selectedMaterial?.status === 'uploading' && <p>Đang phân tích file Word...</p>}
+        {selectedMaterial?.status === 'error' && <p className="form-error">{selectedMaterial.error}</p>}
+
+        {selectedMaterial?.parsed && (
+          <div className="parsed-content">
+            <p className="badge">Tổng số câu: {selectedMaterial.parsed.totalQuestions}</p>
+            {selectedMaterial.parsed.questions.map((question) => (
+              <section key={question.order} className="question-card">
+                <h4>Câu {question.order}</h4>
+                <p className="question-text">{question.question}</p>
+                <ul className="option-list">
+                  {question.options.map((option) => (
+                    <li key={`${question.order}-${option.key}`} className={option.isCorrect ? 'correct-option' : ''}>
+                      <strong>{option.key}.</strong> {option.content}
+                    </li>
+                  ))}
+                </ul>
+                <p>
+                  <strong>Đáp án:</strong> {question.correctAnswer ?? 'Chưa xác định'}
+                </p>
+                {question.explanation && (
+                  <p>
+                    <strong>Lời giải:</strong> {question.explanation}
+                  </p>
+                )}
+              </section>
+            ))}
+          </div>
+        )}
+      </article>
+    </section>
   );
 }
+
+const statusLabel: Record<UploadedMaterial['status'], string> = {
+  idle: 'Chưa parse',
+  uploading: 'Đang xử lý',
+  success: 'Thành công',
+  error: 'Lỗi',
+};
 
 function ReportsTab() {
   return (
