@@ -61,13 +61,10 @@ async function handleParseDocx(req, res) {
     return;
   }
 
-  req.setTimeout(30_000);
-
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const body = Buffer.concat(chunks);
-  const boundary = boundaryMatch[1].replace(/^"|"$/g, '');
-  const parts = parseMultipartFormData(body, boundary);
+  const parts = parseMultipartFormData(body, boundaryMatch[1]);
 
   const filePart = parts.find((part) => {
     const disposition = part.headers['content-disposition'];
