@@ -10,6 +10,7 @@ function App() {
       <Routes>
         <Route path="/" element={<LoginPage />} />
         <Route path="/student/*" element={<StudentDashboard />} />
+        <Route path="/admin/*" element={<TeacherDashboard />} />
         <Route path="/teacher/*" element={<TeacherDashboard />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
